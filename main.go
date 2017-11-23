@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -44,14 +45,17 @@ func main() {
 	proxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 
-			packet, error := httputil.DumpRequestOut(req, true)
-			check(error)
+			packet, _ := httputil.DumpRequestOut(req, true)
+			// check(error)
 
-			decodeURL, error := url.QueryUnescape(req.URL.String())
-			check(error)
+			decodeURL, _ := url.QueryUnescape(req.URL.String())
+			// check(error)
+
+			decodePacket, _ := url.QueryUnescape(string(packet))
+			// check(error)
 
 			// 解析
-			var packetInfoArray = analytics.AnalyzePacket(decodeURL, req.Host, string(packet))
+			var packetInfoArray = analytics.AnalyzePacket(decodeURL, req.Host, decodePacket)
 
 			// DBに保存
 			p := &models.Packet{
@@ -64,6 +68,8 @@ func main() {
 			}
 			packetsCol.Insert(p)
 
+			var detectAllParts []string
+
 			// 解析結果表示
 			for index, packetInfo := range packetInfoArray {
 				if index == 0 {
@@ -74,6 +80,23 @@ func main() {
 					}
 					detectPacketsCol.Insert(dp)
 
+					u, error := url.Parse(decodeURL)
+					check(error)
+					fmt.Println("Scheme: " + u.Scheme)
+					fmt.Println("Host: " + u.Host)
+					fmt.Printf("User: %s\n", u.User)
+					fmt.Println("Path: " + u.Path)
+					fmt.Println("RawPath: " + u.RawPath)
+					fmt.Println("↓Quries↓")
+					for key, values := range u.Query() {
+						fmt.Printf("\x1b[36m"+"%s:\n"+"\x1b[0m", key)
+						for _, v := range values {
+							fmt.Printf("\x1b[32m"+"%s\n"+"\x1b[0m", v)
+						}
+					}
+
+					fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+
 					if packetInfo.IsContainHost {
 						fmt.Println("ホスト判定: " + "想定しているホストです.")
 					} else {
@@ -82,11 +105,14 @@ func main() {
 				}
 				fmt.Println("検知情報: " + packetInfo.AnalyticsItemName + "が含まれている可能性があります.")
 				fmt.Println("使用した正規表現やキーワード: " + packetInfo.RegexpKeyWord)
-				fmt.Println("検知項目: " + "\x1b[31;43m" + strings.Join(packetInfo.DetectParts, ", ") + "\x1b[0m")
+				fmt.Println("検知部分: " + "\x1b[31;43m" + strings.Join(packetInfo.DetectParts, ", ") + "\x1b[0m")
 				fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+				detectAllParts = append(detectAllParts, packetInfo.DetectParts...)
 				if index == len(packetInfoArray)-1 {
-					printColorPacket(string(packet), packetInfo.DetectParts)
-					fmt.Println("================================================================================================================================================================")
+					printColorPacket(decodePacket, detectAllParts)
+					fmt.Println("\x1b[31m================================================================================================================================================================\x1b[0m")
+					r, _ := http.NewRequest("GET", "", nil)
+					return r, nil
 				}
 			}
 			return req, nil
@@ -100,26 +126,44 @@ func main() {
 	log.Fatal(http.ListenAndServe(*addr, proxy))
 }
 
-var remainPacket string
-
 // TODO: - ロジックがゴミってるので再考
 func printColorPacket(packet string, detectParts []string) {
-	for index, detectPart := range detectParts {
+
+	var uniqDetectParts = uniqStrArray(detectParts)
+	var detects Detects = []Detect{}
+
+	var indexs []int
+	for _, part := range uniqDetectParts {
+		detect := Detect{}
+		detect.Part = part
+		index := strings.Index(packet, part)
+		if !isContainIndex(indexs, index) {
+			detect.Index = index
+			detects = append(detects, detect)
+			indexs = append(indexs, index)
+		}
+	}
+	// Index順に並び替え
+	sort.Sort(detects)
+
+	var remainPacket string
+
+	for index, detect := range detects {
 		var firstDetectPartIndex int
 		var packetLastIndex int
 		var nonDetectPart string
 
 		if index == 0 {
-			firstDetectPartIndex = strings.Index(packet, detectPart)
+			firstDetectPartIndex = strings.Index(packet, detect.Part)
 			packetLastIndex = utf8.RuneCountInString(packet)
 			nonDetectPart = packet[0:firstDetectPartIndex]
 		} else {
-			firstDetectPartIndex = strings.Index(remainPacket, detectPart)
+			firstDetectPartIndex = strings.Index(remainPacket, detect.Part)
 			packetLastIndex = utf8.RuneCountInString(remainPacket)
 			nonDetectPart = remainPacket[0:firstDetectPartIndex]
 		}
 
-		lastDetectPartIndex := firstDetectPartIndex + utf8.RuneCountInString(detectPart)
+		lastDetectPartIndex := firstDetectPartIndex + utf8.RuneCountInString(detect.Part)
 		if index == 0 {
 			remainPacket = packet[lastDetectPartIndex:packetLastIndex]
 		} else {
@@ -127,10 +171,52 @@ func printColorPacket(packet string, detectParts []string) {
 		}
 
 		fmt.Print(nonDetectPart)
-		fmt.Print("\x1b[31;43m" + detectPart + "\x1b[0m")
+		fmt.Print("\x1b[31;43m" + detect.Part + "\x1b[0m")
 
-		if index == len(detectParts)-1 {
+		if index == len(detects)-1 {
 			fmt.Println(remainPacket)
 		}
 	}
+}
+
+// Detect -
+type Detect struct {
+	Part  string
+	Index int
+}
+
+// Detects -
+type Detects []Detect
+
+func (d Detects) Len() int {
+	return len(d)
+}
+
+func (d Detects) Swap(i, j int) {
+	d[i], d[j] = d[j], d[i]
+}
+
+func (d Detects) Less(i, j int) bool {
+	return d[i].Index < d[j].Index
+}
+
+func uniqStrArray(strs []string) []string {
+	m := make(map[string]bool)
+	uniq := []string{}
+	for _, ele := range strs {
+		if !m[ele] {
+			m[ele] = true
+			uniq = append(uniq, ele)
+		}
+	}
+	return uniq
+}
+
+func isContainIndex(arr []int, index int) bool {
+	for _, v := range arr {
+		if v == index {
+			return true
+		}
+	}
+	return false
 }
