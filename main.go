@@ -69,6 +69,7 @@ func main() {
 			packetsCol.Insert(p)
 
 			var detectAllParts []string
+			isContainHost := false
 
 			// 解析結果表示
 			for index, packetInfo := range packetInfoArray {
@@ -80,40 +81,50 @@ func main() {
 					}
 					detectPacketsCol.Insert(dp)
 
-					u, error := url.Parse(decodeURL)
-					check(error)
-					fmt.Println("Scheme: " + u.Scheme)
-					fmt.Println("Host: " + u.Host)
-					fmt.Printf("User: %s\n", u.User)
-					fmt.Println("Path: " + u.Path)
-					fmt.Println("RawPath: " + u.RawPath)
-					fmt.Println("↓Quries↓")
-					for key, values := range u.Query() {
-						fmt.Printf("\x1b[36m"+"%s:\n"+"\x1b[0m", key)
-						for _, v := range values {
-							fmt.Printf("\x1b[32m"+"%s\n"+"\x1b[0m", v)
+					if !packetInfo.IsContainHost {
+						isContainHost = true
+
+						u, error := url.Parse(decodeURL)
+						check(error)
+						fmt.Println("Scheme: " + u.Scheme)
+						fmt.Println("Host: " + u.Host)
+						fmt.Printf("User: %s\n", u.User)
+						fmt.Println("Path: " + u.Path)
+						fmt.Println("RawPath: " + u.RawPath)
+						fmt.Println("↓Quries↓")
+						for key, values := range u.Query() {
+							fmt.Printf("\x1b[36m"+"%s:\n"+"\x1b[0m", key)
+							for _, v := range values {
+								fmt.Printf("\x1b[32m"+"%s\n"+"\x1b[0m", v)
+							}
 						}
-					}
 
-					fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
-
-					if packetInfo.IsContainHost {
-						fmt.Println("ホスト判定: " + "想定しているホストです.")
-					} else {
+						fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
 						fmt.Println("ホスト判定: " + "想定していないホストです.")
+
+					} else {
+						fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+						fmt.Println("ホスト判定: " + "想定しているホストです.")
 					}
 				}
-				fmt.Println("検知情報: " + packetInfo.AnalyticsItemName + "が含まれている可能性があります.")
-				fmt.Println("使用した正規表現やキーワード: " + packetInfo.RegexpKeyWord)
-				fmt.Println("検知部分: " + "\x1b[31;43m" + strings.Join(packetInfo.DetectParts, ", ") + "\x1b[0m")
-				fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+				if !packetInfo.IsContainHost {
+					fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+					fmt.Println("検知情報: " + packetInfo.AnalyticsItemName + "が含まれている可能性があります.")
+					fmt.Println("使用した正規表現やキーワード: " + packetInfo.RegexpKeyWord)
+					fmt.Println("検知部分: " + "\x1b[31;43m" + strings.Join(packetInfo.DetectParts, ", ") + "\x1b[0m")
+				}
 				detectAllParts = append(detectAllParts, packetInfo.DetectParts...)
 				if index == len(packetInfoArray)-1 {
-					printColorPacket(decodePacket, detectAllParts)
+					fmt.Println("----------------------------------------------------------------------------------------------------------------------------------------------------------------")
+					if !packetInfo.IsContainHost {
+						printColorPacket(decodePacket, detectAllParts)
+					}
 					fmt.Println("\x1b[31m================================================================================================================================================================\x1b[0m")
-					r, _ := http.NewRequest("GET", "", nil)
-					return r, nil
 				}
+			}
+			if isContainHost {
+				r, _ := http.NewRequest("GET", "", nil)
+				return r, nil
 			}
 			return req, nil
 		})
